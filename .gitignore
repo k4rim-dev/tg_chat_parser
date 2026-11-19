@@ -1,0 +1,22 @@
+# не публикую локальные выгрузки и результаты
+/*/
+!/tests/
+!/.github/
+!/examples/
+*.html
+*.txt
+!requirements*.txt
+*.json
+!examples/*.json
+*.md
+!README.md
+__pycache__/
+*.py[cod]
+.venv/
+.env*
+*.log
+*.tmp
+*.ogg
+*.mp4
+*.jpg
+*.png
