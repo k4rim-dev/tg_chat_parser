@@ -14,6 +14,9 @@ from urllib.parse import unquote, urlsplit
 
 from bs4 import BeautifulSoup
 
+MODELS = {"base": ("Быстрая", 148), "small": ("Точнее", 486)}
+DEFAULT_MODEL = "base"
+
 
 class Cancelled(Exception):
     pass
@@ -42,6 +45,19 @@ class Result:
     audio: int
 
 
+@dataclass
+class AudioItem:
+    path: Path
+    kind: str
+    message: Message
+    parts: list[str]
+    index: int
+
+    def set_text(self, text):
+        self.parts[self.index] = f"[{self.kind}: {text or 'тишина или неразборчиво'}]"
+        self.message.text = "\n".join(self.parts)
+
+
 def natural_key(path: Path):
     numbers = re.findall(r"\d+", path.stem)
     return (int(numbers[0]) if numbers else 1, path.name)
@@ -52,7 +68,7 @@ def export_folder(path):
     if path.is_file() and path.suffix.lower() == ".html":
         path = path.parent
     if not path.is_dir() or not list(path.glob("messages*.html")):
-        raise ValueError("Выбери папку HTML-экспорта Telegram с messages.html.")
+        raise ValueError("Нужна папка HTML-экспорта Telegram с messages.html.")
     return path
 
 
@@ -68,7 +84,7 @@ def media_path(folder, href):
 
 
 class Transcriber:
-    def __init__(self, model="small", language="ru", offline=False):
+    def __init__(self, model=DEFAULT_MODEL, language="ru", offline=False):
         self.model_name = model
         self.language = None if language == "auto" else language
         self.offline = offline
@@ -80,8 +96,7 @@ class Transcriber:
                 from faster_whisper import WhisperModel
             except ImportError as exc:
                 raise TranscriptionSetupError(
-                    "Для распознавания установи requirements-audio.txt "
-                    "или отключи распознавание."
+                    "Для распознавания нужны зависимости из requirements-audio.txt."
                 ) from exc
             try:
                 self.model = WhisperModel(
@@ -96,8 +111,8 @@ class Transcriber:
         return " ".join(segment.text.strip() for segment in segments).strip()
 
 
-def parse_export(source, *, transcribe=False, model="small", language="ru",
-                 offline=False, progress=None, cancel=None, transcriber=None):
+def parse_export(source, *, transcribe=False, model=DEFAULT_MODEL, language="ru",
+                 offline=False, progress=None, cancel=None, transcriber=None, audio_items=None):
     folder = export_folder(source)
     progress = progress or (lambda done, total, status: None)
     cancel = cancel or Event()
@@ -141,6 +156,7 @@ def parse_export(source, *, transcribe=False, model="small", language="ru",
                 fragment = urlsplit(reply["href"]).fragment
                 reply_to = fragment.removeprefix("go_to_")
             parts = []
+            attachments = []
             links = set()
             for link in node.select("div.media_wrap a[href]"):
                 href = link["href"]
@@ -155,16 +171,19 @@ def parse_export(source, *, transcribe=False, model="small", language="ru",
                     audio += 1
                     kind = "ГС" if decoded.startswith("voice_messages/") else "Кружок"
                     label = f"[{kind}: {href}]"
-                    if transcribe:
+                    if transcribe or audio_items is not None:
                         try:
                             path = media_path(folder, href)
                             if not path.is_file():
                                 raise FileNotFoundError("файл не найден")
-                            progress(page_index + index / max(len(nodes), 1), len(pages),
-                                     f"Распознаю {path.name}")
-                            if path not in audio_cache:
-                                audio_cache[path] = recognize(path) or "тишина или неразборчиво"
-                            label = f"[{kind}: {audio_cache[path]}]"
+                            if audio_items is not None:
+                                attachments.append((path, kind, len(parts)))
+                            else:
+                                progress(page_index + index / max(len(nodes), 1), len(pages),
+                                         f"Распознаю {path.name}")
+                                if path not in audio_cache:
+                                    audio_cache[path] = recognize(path) or "тишина или неразборчиво"
+                                label = f"[{kind}: {audio_cache[path]}]"
                         except TranscriptionSetupError:
                             raise
                         except Exception as exc:
@@ -206,7 +225,11 @@ def parse_export(source, *, transcribe=False, model="small", language="ru",
                 warnings.append(f"{message_id or 'без id'}: отсутствует дата")
             if not parts:
                 parts.append("[Сообщение без текста или поддерживаемого медиа]")
-            messages.append(Message(message_id, timestamp, sender, "\n".join(parts), reply_to, reactions))
+            message = Message(message_id, timestamp, sender, "\n".join(parts), reply_to, reactions)
+            messages.append(message)
+            if audio_items is not None:
+                for path, kind, part_index in attachments:
+                    audio_items.append(AudioItem(path, kind, message, parts, part_index))
             progress(page_index + (index + 1) / max(len(nodes), 1), len(pages),
                      f"Обработано сообщений: {len(messages)}")
     check_cancel()
@@ -277,7 +300,7 @@ def main(argv=None):
     parser.add_argument("source", nargs="?", help="Папка экспорта или messages.html; без аргументов открывается окно")
     parser.add_argument("-o", "--output", type=Path, help="Файл .txt, .md или .json (по умолчанию full_chat.txt в экспорте)")
     parser.add_argument("--transcribe", action="store_true", help="Распознать ГС и кружки на CPU")
-    parser.add_argument("--model", choices=["tiny", "base", "small", "medium", "large-v3"], default="small")
+    parser.add_argument("--model", choices=MODELS, default=DEFAULT_MODEL)
     parser.add_argument("--language", default="ru", help="Код языка или auto")
     parser.add_argument("--offline", action="store_true", help="Использовать только ранее скачанную модель")
     parser.add_argument("--overwrite", action="store_true", help="Разрешить замену результата")

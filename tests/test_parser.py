@@ -48,6 +48,21 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(result.messages[0].text, "[Кружок: тест речи]")
         self.assertEqual(result.messages[0].reactions, ["👍 (Аня)"])
 
+    def test_audio_items_preserve_cancelled_attachment(self):
+        folder = self.folder / "voice_messages"
+        folder.mkdir()
+        for name in ("a.ogg", "b.ogg"):
+            (folder / name).touch()
+        media = ('<div class="media_wrap"><a href="voice_messages/a.ogg">a</a>'
+                 '<a href="voice_messages/b.ogg">b</a></div>')
+        self.page("messages.html", message(1, "Подпись", extra=media))
+        items = []
+        result = parse_export(self.folder, audio_items=items)
+        self.assertEqual(len(items), 2)
+        items[1].set_text("Вторая запись")
+        self.assertEqual(result.messages[0].text,
+                         "[ГС: voice_messages/a.ogg]\n[ГС: Вторая запись]\nПодпись")
+
     def test_missing_audio_and_unexported_media(self):
         media = '<div class="media_wrap"><a href="voice_messages/missing.ogg">voice</a><div class="media"><div class="title">Photo</div></div></div>'
         self.page("messages.html", message(1, "подпись", extra=media))
